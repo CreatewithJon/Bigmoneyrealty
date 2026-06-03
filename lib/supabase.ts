@@ -1,8 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 export function getSupabase() {
-  return createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_ANON_KEY!
-  );
+  const url = process.env.SUPABASE_URL!.trim();
+  const key = process.env.SUPABASE_ANON_KEY!.replace(/\s/g, "");
+  return createClient(url, key);
 }
