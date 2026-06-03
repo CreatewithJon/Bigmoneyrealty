@@ -84,6 +84,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ leads: data });
   } catch (err) {
     console.error("CRM leads fetch error:", err);
-    return NextResponse.json({ error: "Failed to fetch CRM leads." }, { status: 500 });
+    return NextResponse.json({ error: "Failed to fetch CRM leads.", detail: String(err) }, { status: 500 });
   }
 }
