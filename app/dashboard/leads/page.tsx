@@ -32,6 +32,13 @@ const PRIORITY_COLOR: Record<string, string> = {
   cold: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
 }
 
+// Extended lead type with triage fields
+type LeadWithTriage = Lead & {
+  triage_status?: 'pending' | 'analyzing' | 'complete' | 'failed'
+  urgency_score?: number
+  notes?: string | null
+}
+
 const EMPTY_FORM = {
   name: '',
   email: '',
@@ -54,8 +61,74 @@ function formatDate(d: string) {
   })
 }
 
+function TriageStatusBadge({
+  status,
+  urgencyScore,
+}: {
+  status: string | undefined
+  urgencyScore?: number
+}) {
+  if (!status || status === 'pending') {
+    return (
+      <span
+        className="text-[10px] font-semibold uppercase tracking-[0.1em] px-2 py-0.5 rounded-full border text-white/35 bg-white/[0.04] border-white/[0.1]"
+        style={{ fontFamily: 'var(--font-lato)' }}
+      >
+        Pending
+      </span>
+    )
+  }
+  if (status === 'analyzing') {
+    return (
+      <span
+        className="text-[10px] font-semibold uppercase tracking-[0.1em] px-2 py-0.5 rounded-full border text-amber-400 bg-amber-500/10 border-amber-500/20 animate-pulse"
+        style={{ fontFamily: 'var(--font-lato)' }}
+      >
+        Analyzing…
+      </span>
+    )
+  }
+  if (status === 'complete') {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-[0.1em] px-2 py-0.5 rounded-full border text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+          style={{ fontFamily: 'var(--font-lato)' }}
+        >
+          Triaged
+        </span>
+        {urgencyScore !== undefined && (
+          <span
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${
+              urgencyScore >= 9
+                ? 'text-red-400 bg-red-500/10 border-red-500/25'
+                : urgencyScore >= 7
+                ? 'text-amber-400 bg-amber-500/10 border-amber-500/25'
+                : 'text-white/40 bg-white/[0.05] border-white/[0.1]'
+            }`}
+            style={{ fontFamily: 'var(--font-lato)' }}
+          >
+            {urgencyScore}/10
+          </span>
+        )}
+      </div>
+    )
+  }
+  if (status === 'failed') {
+    return (
+      <span
+        className="text-[10px] font-semibold uppercase tracking-[0.1em] px-2 py-0.5 rounded-full border text-red-400 bg-red-500/10 border-red-500/20"
+        style={{ fontFamily: 'var(--font-lato)' }}
+      >
+        Failed
+      </span>
+    )
+  }
+  return null
+}
+
 export default function LeadsPage() {
-  const [leads, setLeads] = useState<Lead[]>([])
+  const [leads, setLeads] = useState<LeadWithTriage[]>([])
   const [loading, setLoading] = useState(true)
   const [orgId, setOrgId] = useState<string | null>(null)
 
@@ -72,16 +145,27 @@ export default function LeadsPage() {
   const [formError, setFormError] = useState<string | null>(null)
 
   // Detail panel
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [selectedLead, setSelectedLead] = useState<LeadWithTriage | null>(null)
+
+  // Triage trigger
+  const [retriaging, setRetriaging] = useState<string | null>(null)
 
   const fetchLeads = useCallback(async (orgIdVal: string) => {
+    // Fetch from broker API which includes triage_status
+    const res = await fetch('/api/broker/leads?limit=100')
+    if (res.ok) {
+      const data = await res.json() as { leads: LeadWithTriage[] }
+      setLeads(data.leads ?? [])
+      return
+    }
+    // Fallback to direct Supabase if broker API fails
     const supabase = createClient()
     const { data } = await supabase
       .from('bmr_leads')
       .select('*')
       .eq('organization_id', orgIdVal)
       .order('created_at', { ascending: false })
-    setLeads(data ?? [])
+    setLeads((data as LeadWithTriage[]) ?? [])
   }, [])
 
   useEffect(() => {
@@ -108,7 +192,7 @@ export default function LeadsPage() {
       await fetchLeads(membership.organization_id)
       setLoading(false)
     }
-    init()
+    void init()
   }, [fetchLeads])
 
   // Open add modal if ?action=add
@@ -176,6 +260,16 @@ export default function LeadsPage() {
     )
     if (selectedLead?.id === leadId) {
       setSelectedLead((prev) => (prev ? { ...prev, status } : prev))
+    }
+  }
+
+  async function handleTriageNow(leadId: string) {
+    setRetriaging(leadId)
+    try {
+      await fetch(`/api/broker/leads/${leadId}/triage`, { method: 'POST' })
+      if (orgId) await fetchLeads(orgId)
+    } catch { /* non-fatal */ } finally {
+      setRetriaging(null)
     }
   }
 
@@ -286,6 +380,7 @@ export default function LeadsPage() {
                     'Type',
                     'Source',
                     'Status',
+                    'AI Triage',
                     'Priority',
                     'Date',
                   ].map((h) => (
@@ -303,7 +398,7 @@ export default function LeadsPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={8}
                       className="px-5 py-10 text-center text-sm text-white/25"
                       style={{ fontFamily: 'var(--font-lato)' }}
                     >
@@ -364,7 +459,7 @@ export default function LeadsPage() {
                         value={lead.status}
                         onChange={(e) => {
                           e.stopPropagation()
-                          handleStatusUpdate(lead.id, e.target.value as Lead['status'])
+                          void handleStatusUpdate(lead.id, e.target.value as Lead['status'])
                         }}
                         onClick={(e) => e.stopPropagation()}
                         className="bg-transparent text-xs text-white/55 border border-white/[0.08] rounded px-2 py-1 focus:outline-none focus:border-[#b8922a]/40"
@@ -376,6 +471,24 @@ export default function LeadsPage() {
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td className="px-5 py-3.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2">
+                        <TriageStatusBadge
+                          status={lead.triage_status}
+                          urgencyScore={lead.urgency_score}
+                        />
+                        {(!lead.triage_status || lead.triage_status === 'pending' || lead.triage_status === 'failed') && (
+                          <button
+                            onClick={() => void handleTriageNow(lead.id)}
+                            disabled={retriaging === lead.id}
+                            className="text-[10px] px-2 py-1 rounded border border-[#b8922a]/25 text-[#b8922a]/70 hover:border-[#b8922a]/50 hover:text-[#b8922a] transition-colors disabled:opacity-40"
+                            style={{ fontFamily: 'var(--font-lato)' }}
+                          >
+                            {retriaging === lead.id ? '…' : 'Triage'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-3.5">
                       {lead.priority && (
@@ -411,14 +524,20 @@ export default function LeadsPage() {
                 >
                   {selectedLead.name}
                 </h3>
-                {selectedLead.priority && (
-                  <span
-                    className={`text-[10px] font-semibold uppercase tracking-[0.1em] px-2 py-0.5 rounded-full border ${PRIORITY_COLOR[selectedLead.priority]}`}
-                    style={{ fontFamily: 'var(--font-lato)' }}
-                  >
-                    {selectedLead.priority}
-                  </span>
-                )}
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  {selectedLead.priority && (
+                    <span
+                      className={`text-[10px] font-semibold uppercase tracking-[0.1em] px-2 py-0.5 rounded-full border ${PRIORITY_COLOR[selectedLead.priority]}`}
+                      style={{ fontFamily: 'var(--font-lato)' }}
+                    >
+                      {selectedLead.priority}
+                    </span>
+                  )}
+                  <TriageStatusBadge
+                    status={selectedLead.triage_status}
+                    urgencyScore={selectedLead.urgency_score}
+                  />
+                </div>
               </div>
               <button
                 onClick={() => setSelectedLead(null)}
@@ -434,7 +553,7 @@ export default function LeadsPage() {
                 { label: 'Phone', value: selectedLead.phone },
                 { label: 'Type', value: selectedLead.lead_type },
                 { label: 'Source', value: selectedLead.lead_source },
-                { label: 'Status', value: STATUS_LABEL[selectedLead.status] },
+                { label: 'Status', value: STATUS_LABEL[selectedLead.status] ?? selectedLead.status },
                 { label: 'Address', value: selectedLead.property_address },
                 {
                   label: 'Budget',
@@ -480,6 +599,18 @@ export default function LeadsPage() {
                 </div>
               )}
             </div>
+
+            {/* Triage Now button in detail panel */}
+            {(!selectedLead.triage_status || selectedLead.triage_status === 'pending' || selectedLead.triage_status === 'failed') && (
+              <button
+                onClick={() => void handleTriageNow(selectedLead.id)}
+                disabled={retriaging === selectedLead.id}
+                className="w-full py-2.5 bg-[#b8922a]/10 hover:bg-[#b8922a]/15 border border-[#b8922a]/20 hover:border-[#b8922a]/35 text-[#b8922a]/80 text-sm rounded-lg transition-colors disabled:opacity-40"
+                style={{ fontFamily: 'var(--font-lato)' }}
+              >
+                {retriaging === selectedLead.id ? 'Running AI Triage…' : '◈ Run AI Triage'}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -507,7 +638,7 @@ export default function LeadsPage() {
               </button>
             </div>
 
-            <form onSubmit={handleAddLead} className="space-y-4">
+            <form onSubmit={(e) => void handleAddLead(e)} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <label className="block text-[10px] uppercase tracking-[0.12em] text-white/35 mb-1.5" style={{ fontFamily: 'var(--font-lato)' }}>
